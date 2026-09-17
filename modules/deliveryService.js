@@ -50,11 +50,12 @@ function parsePayload( payload ) {
 /**
  * @description Builds the form body for one delivery.
  *
- * Only scalar values are sent. A nested object in the payload would be
- * stringified into something the PHP side could not read, so those are
- * dropped rather than mangled.
+ * Endpoints differ in how they want the guest attributes. An NCS box reads
+ * flat $_REQUEST fields, one per attribute, while gen3 expects the whole
+ * payload as a JSON string in a single data parameter. Keeping the choice on
+ * the endpoint row means a new IPTV brand is a row, not a code change.
  *
- * @param {object} row - Queue row
+ * @param {object} row - Queue row joined with its endpoint
  * @param {object} payload - Parsed payload
  * @returns {URLSearchParams} Form body ready to post
  */
@@ -62,12 +63,17 @@ function buildFormBody( row, payload ) {
 
     const form = new URLSearchParams();
 
-    form.append( 'what_do_you_want', VERB_MAP[ row.verb ] || row.verb );
-    
+    form.append( 'what_do_you_want', row.verb );
+
     /* Sent on every delivery, not just to endpoints that ask for it. A local
-       NCS box serves one hotel and ignores it, but a cloud endpoint like gen3
-       serves them all and cannot act without it. */
+       NCS box serves one hotel and ignores it, but a cloud endpoint serves
+       them all and cannot act without it. */
     form.append( 'property_id', row.property_id );
+
+    if ( row.payload_format === 'json_data' ) {
+        form.append( 'data', JSON.stringify( payload ) );
+        return form;
+    }
 
     Object.keys( payload ).forEach( function( key ) {
 
@@ -130,6 +136,18 @@ async function deliver( row ) {
     let response;
 
     try {
+        /* Full request dump, debug only. A delivery that fails at the endpoint is
+            almost always a payload shape mismatch, and seeing the exact body sent
+            is faster than inferring it from the endpoint's error message. */
+         logger.debug( '--- DELIVERY REQUEST ---------------------------------' );
+         logger.debug( 'Queue row   : ' + row.id + '  attempt ' + ( row.attempt_count + 1 ) );
+         logger.debug( 'Endpoint    : ' + row.endpoint_id + ' (' + row.endpoint_type + ')' );
+         logger.debug( 'URL         : ' + row.endpoint_url );
+         logger.debug( 'Format      : ' + ( row.payload_format || 'flat' )
+                       + ', auth ' + ( row.auth_type || 'none' ) );
+         logger.debug( 'Headers     : ' + JSON.stringify( maskHeaders( headers ) ) );
+         logger.debug( 'Body        : ' + form.toString() );
+
         response = await axios.post( row.endpoint_url, form.toString(), {
             timeout: config.delivery.timeout,
             headers: headers,
@@ -138,6 +156,8 @@ async function deliver( row ) {
             // an unreachable host
             validateStatus: function() { return true; }
         } );
+        
+        
     }
     catch ( err ) {
         return {
@@ -146,6 +166,12 @@ async function deliver( row ) {
             message: err.code ? ( err.code + ' : ' + err.message ) : err.message
         };
     }
+    
+    logger.debug( '--- DELIVERY RESPONSE --------------------------------' );
+    logger.debug( 'HTTP        : ' + response.status );
+    logger.debug( 'Content-Type: ' + ( response.headers[ 'content-type' ] || 'unset' ) );
+    logger.debug( 'Body        : ' + dumpBody( response.data ) );
+    logger.debug( '------------------------------------------------------' );
 
     /* An expired token is recoverable. Clearing it means the retry in five
        minutes re-authenticates rather than failing the same way forever. */
@@ -252,8 +278,65 @@ async function deliverViaElc( row, wsServer ) {
     return wsServer.pushDelivery( row.property_id, row, payload );
 }
 
+/**
+ * @description Masks credential values in a header set before logging.
+ *
+ * An access token in a log file is a credential sitting somewhere it was
+ * never meant to be. The prefix is kept so a wrong or stale token is still
+ * recognisable.
+ *
+ * @param {object} headers - Headers about to be sent
+ * @returns {object} A copy safe to log
+ */
+function maskHeaders( headers ) {
+
+    const safe = {};
+
+    Object.keys( headers ).forEach( function( key ) {
+
+        const value = String( headers[ key ] );
+
+        if ( key.toLowerCase() === 'content-type' ) {
+            safe[ key ] = value;
+            return;
+        }
+
+        safe[ key ] = value.length > 12
+                      ? ( value.substring( 0, 12 ) + '...[' + value.length + ' chars]' )
+                      : '[set]';
+    } );
+
+    return safe;
+}
+
+/**
+ * @description Renders a response body for logging, whatever type it arrived as.
+ *
+ * A PHP fatal or warning arrives as HTML rather than JSON, and that is
+ * exactly the case worth seeing in full - so nothing is truncated below a
+ * length that would hide it.
+ *
+ * @param {*} data - Response body
+ * @returns {string}
+ */
+function dumpBody( data ) {
+
+    if ( data === null || data === undefined ) {
+        return '[empty]';
+    }
+
+    const text = ( typeof data === 'string' )
+                 ? data
+                 : JSON.stringify( data );
+
+    return text.length > 4000
+           ? ( text.substring( 0, 4000 ) + ' ...[truncated, ' + text.length + ' chars]' )
+           : text;
+}
+
 module.exports = {
     deliver: deliver,
     deliverViaElc: deliverViaElc,
     interpretResponse: interpretResponse
 };
+

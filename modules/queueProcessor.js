@@ -76,6 +76,14 @@ async function pace( endpointId ) {
  * @returns {Promise<void>}
  */
 async function processRow( row ) {
+    
+    logger.debug( 'processRow: id=' + row.id
+                  + ' endpoint=' + row.endpoint_id
+                  + ' url=' + ( row.endpoint_url || 'NULL' )
+                  + ' mode=' + ( row.delivery_mode || 'NULL' )
+                  + ' enabled=' + row.endpoint_enabled
+                  + ' archived=' + row.endpoint_archived
+                  + ' format=' + ( row.payload_format || 'NULL' ) );
 
     /* The LEFT JOIN leaves these null when the endpoint no longer exists */
     if ( !row.endpoint_url ) {

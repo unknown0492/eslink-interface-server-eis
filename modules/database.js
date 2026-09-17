@@ -184,7 +184,7 @@ async function claimBatch() {
     const [ rows ] = await pool.query(
         "SELECT q.id, q.property_id, q.endpoint_id, q.room_no, q.verb, q.payload, "
         + "       q.attempt_count, q.created_on, "
-        + "       e.endpoint_url, e.endpoint_type, e.delivery_mode, e.verb_prefix, "
+        + "       e.endpoint_url, e.endpoint_type, e.delivery_mode, e.payload_format, "
         + "       e.auth_type, e.auth_url, e.auth_app_id, e.auth_app_secret, "
         + "       e.auth_header_name, "
         + "       e.enabled AS endpoint_enabled, e.archived AS endpoint_archived "
